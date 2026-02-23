@@ -1,0 +1,167 @@
+// ============================================================
+// 領収書処理アプリ — Prisma スキーマ（MVP版）
+// DB: PostgreSQL (本番) / SQLite (ローカル開発)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Prisma 7: URL は prisma.config.ts で管理
+  provider = "postgresql"
+}
+
+// -----------------------------------------------
+// 1. users
+// -----------------------------------------------
+
+model User {
+  id                     String   @id @default(cuid())
+  email                  String?  @unique
+  auth_provider          String   // "line" | "email"
+  auth_subject           String   @unique
+  default_credit_account String   @default("現金")
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+
+  jobs     Job[]
+  receipts Receipt[]
+  rules    Rule[]
+  exports  Export[]
+
+  @@map("users")
+}
+
+// -----------------------------------------------
+// 2. jobs
+// -----------------------------------------------
+
+model Job {
+  id                     String    @id @default(cuid())
+  user_id                String
+  status                 String    @default("queued")
+  // "queued" | "processing" | "completed" | "failed" | "canceled"
+  progress_step          String?
+  // "frame_extract" | "detect" | "ocr" | "parse" | "classify" | "export_ready"
+  progress_pct           Int       @default(0)
+  video_filename         String
+  video_mime             String
+  video_size_bytes       BigInt
+  video_duration_sec     Int?
+  video_storage_key      String
+  detected_receipt_count Int       @default(0)
+  needs_review_count     Int       @default(0)
+  total_amount_sum       Int       @default(0)
+  error_code             String?
+  error_message          String?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  user     User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  receipts Receipt[]
+  exports  Export[]
+
+  @@index([user_id, status])
+  @@map("jobs")
+}
+
+// -----------------------------------------------
+// 3. receipts
+// -----------------------------------------------
+
+model Receipt {
+  id                       String    @id @default(cuid())
+  job_id                   String
+  user_id                  String
+  receipt_index            Int
+  evidence_id              String    @unique
+
+  // ストレージ
+  image_storage_key        String
+  thumbnail_storage_key    String?
+
+  // OCR抽出値（元値）
+  ocr_text_raw             String?   @db.Text
+  ocr_confidence           Float     @default(0)
+  extracted_date           String?   // YYYY-MM-DD
+  extracted_store_name     String?
+  extracted_total_amount   Int?
+  extracted_invoice_number String?
+  extracted_tax_hint       String?
+
+  // 確定値（ユーザー修正後）
+  final_date               String    // YYYY-MM-DD
+  final_store_name         String
+  final_total_amount       Int
+  invoice_flag             String    @default("unknown")
+  // "yes" | "no" | "unknown"
+  invoice_number           String?
+  payment_method           String    @default("unknown")
+  // "cash" | "card" | "transit" | "transfer" | "unknown"
+  debit_account            String
+  debit_account_candidate2 String?
+  credit_account           String
+  tax_category             String
+  partner_name             String
+  description              String
+  memo                     String?
+
+  // フラグ
+  needs_review             Boolean   @default(true)
+  review_reasons           Json      @default("[]")
+  // ReviewReason[]
+  edited_by_user           Boolean   @default(false)
+
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @updatedAt
+
+  job  Job  @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([job_id, needs_review])
+  @@index([user_id, final_date])
+  @@map("receipts")
+}
+
+// -----------------------------------------------
+// 4. rules（学習：店名→科目優先）
+// -----------------------------------------------
+
+model Rule {
+  id               String   @id @default(cuid())
+  user_id          String
+  store_name_key   String   // 正規化済み店名キー
+  debit_account    String
+  tax_category     String?
+  hit_count        Int      @default(0)
+  last_used_at     DateTime @default(now())
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, store_name_key])
+  @@map("rules")
+}
+
+// -----------------------------------------------
+// 5. exports（出力ファイル）
+// -----------------------------------------------
+
+model Export {
+  id                    String   @id @default(cuid())
+  job_id                String
+  user_id               String
+  format                String   // "xlsx" | "csv"
+  template_version      String   @default("yayo-01")
+  credit_account_default String  @default("現金")
+  file_storage_key      String
+  row_count             Int
+  created_at            DateTime @default(now())
+
+  job  Job  @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("exports")
+}

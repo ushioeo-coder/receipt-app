@@ -1,26 +1,56 @@
 @import "tailwindcss";
 
+/* ===== カスタムプロパティ ===== */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-primary: #4a90d9;
+  --color-danger: #d94a4a;
+  --color-warn: #e6a817;
+  --color-ok: #3bb06c;
+  --color-muted: #888;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ===== ベース ===== */
+* {
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== ユーティリティ ===== */
+.badge-warn {
+  @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300;
+}
+
+.badge-ok {
+  @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300;
+}
+
+.btn-primary {
+  @apply bg-blue-500 text-white font-semibold rounded-lg py-3 px-4 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all;
+}
+
+.btn-outline {
+  @apply border border-blue-500 text-blue-500 font-semibold rounded-lg py-3 px-4 active:scale-95 transition-all;
+}
+
+.btn-danger {
+  @apply bg-red-500 text-white font-semibold rounded-lg py-3 px-4 active:scale-95 transition-all;
+}
+
+.card {
+  @apply bg-white border border-gray-200 rounded-xl p-4 shadow-sm;
+}
+
+.form-group label {
+  @apply block text-xs text-gray-500 font-semibold mb-1;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  @apply w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400;
 }
