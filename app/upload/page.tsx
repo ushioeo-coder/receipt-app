@@ -74,21 +74,23 @@ export default function UploadPage() {
                     else {
                         try {
                             const res = JSON.parse(xhr.responseText)
-                            reject(new Error(res.error?.message ?? `アップロード失敗 (${xhr.status})`))
+                            reject(new Error(res.message ?? res.error ?? `アップロード失敗 (${xhr.status})`))
                         } catch {
-                            reject(new Error(`アップロード失敗 (${xhr.status})`))
+                            reject(new Error(`アップロード失敗 (${xhr.status}): ${xhr.responseText.slice(0, 100)}`))
                         }
                     }
                 }
                 xhr.onerror = () => reject(new Error('ネットワークエラー'))
 
-                const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+                const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').trim()
+                const anonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim()
+                // 新規ファイルアップロードはPOST（PUTは更新用）
                 const uploadUrl = `${supabaseUrl}/storage/v1/object/videos/${storagePath}`
 
                 xhr.open('POST', uploadUrl)
-                // Supabase Auth セッショントークンを取得して設定
                 supabase.auth.getSession().then(({ data: { session } }) => {
                     xhr.setRequestHeader('Authorization', `Bearer ${session?.access_token ?? ''}`)
+                    xhr.setRequestHeader('apikey', anonKey)  // 必須ヘッダー
                     xhr.setRequestHeader('Content-Type', selectedFile.type)
                     xhr.setRequestHeader('x-upsert', 'false')
                     xhr.send(selectedFile)
