@@ -31,56 +31,34 @@ export async function GET(request: NextRequest) {
     }
 }
 
-/** POST /api/jobs — 動画アップロード & ジョブ作成 */
+/** POST /api/jobs — ジョブ作成（動画はクライアントがSupabase Storageに直接アップロード済み） */
 export async function POST(request: NextRequest) {
     try {
         const userId = await getAuthUserId()
-        const formData = await request.formData()
-        const file = formData.get('video') as File | null
+        const { storage_key, filename, size, mime } = await request.json()
 
-        if (!file) {
-            throw new ApiError('MISSING_FILE', '動画ファイルが必要です', 400)
+        if (!storage_key || !filename) {
+            throw new ApiError('MISSING_PARAMS', 'storage_keyとfilenameは必須です', 400)
         }
 
-        // バリデーション
-        const MAX_SIZE = 200 * 1024 * 1024 // 200MB
-        const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo']
-
-        if (file.size > MAX_SIZE) {
-            throw new ApiError('VIDEO_TOO_LARGE', 'ファイルサイズは200MB以下にしてください', 400)
-        }
-        if (!ALLOWED_TYPES.includes(file.type)) {
-            throw new ApiError('UNSUPPORTED_FORMAT', 'MP4, MOV, AVI形式の動画をアップロードしてください', 400)
-        }
-
-        // ジョブ作成
+        // ジョブ作成（ファイルはすでにStorageにある）
         const job = await prisma.job.create({
             data: {
                 user_id: userId,
-                status: 'queued',
+                status: 'processing',
                 progress_pct: 0,
-                video_filename: file.name,
-                video_mime: file.type,
-                video_size_bytes: BigInt(file.size),
-                video_storage_key: '',
+                video_filename: filename,
+                video_mime: mime ?? 'video/mp4',
+                video_size_bytes: BigInt(size ?? 0),
+                video_storage_key: storage_key,
                 detected_receipt_count: 0,
                 needs_review_count: 0,
                 total_amount_sum: 0,
             },
         })
 
-        // 動画をSupabase StorageにアップロードA
-        const buffer = Buffer.from(await file.arrayBuffer())
-        const storagePath = `${userId}/${job.id}/${file.name}`
-        const storageKey = await uploadFile('videos', storagePath, buffer, file.type)
-
-        await prisma.job.update({
-            where: { id: job.id },
-            data: { video_storage_key: storageKey, status: 'processing' },
-        })
-
         // バックグラウンドでパイプライン実行（fire-and-forget）
-        processVideoJob(job.id, userId, storageKey).catch((e) => {
+        processVideoJob(job.id, userId, storage_key).catch((e) => {
             console.error(`Job ${job.id} failed:`, e)
             prisma.job.update({
                 where: { id: job.id },

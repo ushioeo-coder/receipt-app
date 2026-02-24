@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { createBrowserClient } from '@supabase/ssr'
 
 const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo']
 const MAX_SIZE_MB = 200
@@ -13,11 +14,12 @@ export default function UploadPage() {
     const [selectedFile, setSelectedFile] = useState<File | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [uploading, setUploading] = useState(false)
+    const [uploadProgress, setUploadProgress] = useState(0)
     const [showGuide, setShowGuide] = useState(false)
 
     const validateFile = (file: File): string | null => {
         if (!ALLOWED_TYPES.includes(file.type)) return '対応形式: MP4, MOV, AVI'
-        if (file.size > MAX_SIZE_MB * 1024 * 1024) return `ファイルサイズは${MAX_SIZE_MB}MB以下'`
+        if (file.size > MAX_SIZE_MB * 1024 * 1024) return `ファイルサイズは${MAX_SIZE_MB}MB以下にしてください`
         return null
     }
 
@@ -39,19 +41,70 @@ export default function UploadPage() {
         if (!selectedFile) return
         setUploading(true)
         setError(null)
+        setUploadProgress(0)
 
         try {
-            const formData = new FormData()
-            formData.append('video', selectedFile)
+            // 1. Presigned URLを取得
+            setUploadProgress(5)
+            const presignRes = await fetch('/api/upload/presign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename: selectedFile.name,
+                    size: selectedFile.size,
+                    mime: selectedFile.type,
+                }),
+            })
 
-            const res = await fetch('/api/jobs', { method: 'POST', body: formData })
-            const json = await res.json()
+            if (!presignRes.ok) {
+                const json = await presignRes.json()
+                throw new Error(json.error?.message ?? 'URL取得失敗')
+            }
+            const { data: { upload_url, storage_key } } = await presignRes.json()
 
-            if (!res.ok) throw new Error(json.error?.message ?? 'アップロード失敗')
-            router.push(`/jobs/${json.data.job_id}/processing`)
+            // 2. Supabase Storageに直接アップロード（XHRで進捗取得）
+            setUploadProgress(10)
+            await new Promise<void>((resolve, reject) => {
+                const xhr = new XMLHttpRequest()
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        const pct = Math.round((e.loaded / e.total) * 80) + 10
+                        setUploadProgress(pct)
+                    }
+                }
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) resolve()
+                    else reject(new Error(`アップロード失敗 (${xhr.status})`))
+                }
+                xhr.onerror = () => reject(new Error('ネットワークエラー'))
+                xhr.open('PUT', upload_url)
+                xhr.setRequestHeader('Content-Type', selectedFile.type)
+                xhr.send(selectedFile)
+            })
+
+            setUploadProgress(90)
+
+            // 3. ジョブを作成してパイプライン開始
+            const jobRes = await fetch('/api/jobs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    storage_key,
+                    filename: selectedFile.name,
+                    size: selectedFile.size,
+                    mime: selectedFile.type,
+                }),
+            })
+
+            const jobJson = await jobRes.json()
+            if (!jobRes.ok) throw new Error(jobJson.error?.message ?? 'ジョブ作成失敗')
+
+            setUploadProgress(100)
+            router.push(`/jobs/${jobJson.data.job_id}/processing`)
         } catch (e) {
             setError(e instanceof Error ? e.message : 'エラーが発生しました')
             setUploading(false)
+            setUploadProgress(0)
         }
     }
 
@@ -85,8 +138,8 @@ export default function UploadPage() {
                     onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
                     onDragLeave={() => setDragOver(false)}
                     className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center gap-4 cursor-pointer transition-all ${dragOver ? 'border-blue-400 bg-blue-50' :
-                            selectedFile ? 'border-green-400 bg-green-50' :
-                                'border-gray-300 hover:border-blue-300 hover:bg-blue-50'
+                        selectedFile ? 'border-green-400 bg-green-50' :
+                            'border-gray-300 hover:border-blue-300 hover:bg-blue-50'
                         }`}
                 >
                     <input
@@ -129,15 +182,33 @@ export default function UploadPage() {
                     </div>
                 )}
 
+                {/* アップロード進捗 */}
+                {uploading && (
+                    <div className="flex flex-col gap-2">
+                        <div className="flex justify-between text-xs text-gray-500">
+                            <span>{uploadProgress < 90 ? 'アップロード中...' : 'AI分析を開始中...'}</span>
+                            <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                                className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                                style={{ width: `${uploadProgress}%` }}
+                            />
+                        </div>
+                    </div>
+                )}
+
                 {/* ヒント */}
-                <div className="bg-blue-50 rounded-xl p-4">
-                    <p className="text-xs font-bold text-blue-700 mb-2">📹 撮影のコツ</p>
-                    <ul className="text-xs text-blue-600 space-y-1">
-                        <li>・1枚ずつゆっくり映す（2〜3秒/枚）</li>
-                        <li>・明るい場所で、手ブレに注意</li>
-                        <li>・領収書全体が画角に収まるように</li>
-                    </ul>
-                </div>
+                {!uploading && (
+                    <div className="bg-blue-50 rounded-xl p-4">
+                        <p className="text-xs font-bold text-blue-700 mb-2">📹 撮影のコツ</p>
+                        <ul className="text-xs text-blue-600 space-y-1">
+                            <li>・1枚ずつゆっくり映す（2〜3秒/枚）</li>
+                            <li>・明るい場所で、手ブレに注意</li>
+                            <li>・領収書全体が画角に収まるように</li>
+                        </ul>
+                    </div>
+                )}
             </main>
 
             {/* スティッキーフッター */}
@@ -150,7 +221,7 @@ export default function UploadPage() {
                     {uploading ? (
                         <span className="flex items-center justify-center gap-2">
                             <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            アップロード中…
+                            処理中…
                         </span>
                     ) : '処理を開始する →'}
                 </button>
