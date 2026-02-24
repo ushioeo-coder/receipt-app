@@ -30,6 +30,24 @@ export async function getAuthUserId(): Promise<string> {
         throw new ApiError('UNAUTHORIZED', '認証が必要です', 401)
     }
 
+    // public.users テーブルに存在するか確認し、なければ作成
+    // (Job作成時の外部キー制約エラーを防ぐため)
+    const { prisma } = await import('@/lib/prisma')
+
+    // UPSERTを使用して存在確認と作成を同時に行う
+    await prisma.user.upsert({
+        where: { id: user.id },
+        update: {
+            email: user.email,
+        },
+        create: {
+            id: user.id,
+            email: user.email,
+            auth_provider: 'email',
+            auth_subject: user.id,
+        },
+    })
+
     return user.id
 }
 
