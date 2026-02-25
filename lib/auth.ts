@@ -1,60 +1,24 @@
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 
-/** Supabase Authセッションからユーザーを取得するサーバークライアント */
-export async function createSupabaseServerClient() {
-    const cookieStore = await cookies()
-    return createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-            cookies: {
-                getAll() { return cookieStore.getAll() },
-                setAll(cookiesToSet) {
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        cookieStore.set(name, value, options)
-                    )
-                },
-            },
-        }
-    )
-}
+// 固定の「デフォルトユーザー」オブジェクト
+// 認証不要のシングルユーザーモード
+const DEFAULT_USER_ID = 'default-user-v1'
 
-/** APIルートでユーザーIDを取得する共通関数 */
+/** APIルートでユーザーIDを取得する共通関数（認証不要版） */
 export async function getAuthUserId(): Promise<string> {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user }, error } = await supabase.auth.getUser()
-
-    if (error || !user) {
-        throw new ApiError('UNAUTHORIZED', '認証が必要です', 401)
-    }
-
     // public.users テーブルに存在するか確認し、なければ作成
-    // (Job作成時の外部キー制約エラーを防ぐため)
     const { prisma } = await import('@/lib/prisma')
-
-    // UPSERTを使用して存在確認と作成を同時に行う
     await prisma.user.upsert({
-        where: { id: user.id },
-        update: {
-            email: user.email,
-        },
+        where: { id: DEFAULT_USER_ID },
+        update: {},
         create: {
-            id: user.id,
-            email: user.email,
-            auth_provider: 'email',
-            auth_subject: user.id,
+            id: DEFAULT_USER_ID,
+            email: 'default@local',
+            auth_provider: 'none',
+            auth_subject: DEFAULT_USER_ID,
         },
     })
-
-    return user.id
-}
-
-/** リクエストからユーザーIDを取得（後方互換のため維持） */
-export function getUserIdFromRequest(_request: unknown): string {
-    // Supabase Auth方式に移行のため、この関数はAPIルート内でgetAuthUserId()を使う
-    throw new ApiError('UNAUTHORIZED', 'getUserIdFromRequest is deprecated. Use getAuthUserId()', 500)
+    return DEFAULT_USER_ID
 }
 
 /** APIエラークラス */

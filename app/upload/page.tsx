@@ -2,7 +2,6 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@supabase/ssr'
 
 const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo']
 const MAX_SIZE_MB = 200
@@ -17,11 +16,6 @@ export default function UploadPage() {
     const [uploadProgress, setUploadProgress] = useState(0)
     const [showGuide, setShowGuide] = useState(false)
 
-    const supabase = createBrowserClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    )
-
     const validateFile = (file: File): string | null => {
         if (!ALLOWED_TYPES.includes(file.type)) return '対応形式: MP4, MOV, AVI'
         if (file.size > MAX_SIZE_MB * 1024 * 1024) return `ファイルサイズは${MAX_SIZE_MB}MB以下にしてください`
@@ -29,8 +23,8 @@ export default function UploadPage() {
     }
 
     const handleFile = (file: File) => {
-        const err = validateFile(file)
-        if (err) { setError(err); return }
+        const e = validateFile(file)
+        if (e) { setError(e); return }
         setError(null)
         setSelectedFile(file)
     }
@@ -49,18 +43,19 @@ export default function UploadPage() {
         setUploadProgress(5)
 
         try {
-            // 1. ログイン中ユーザーを取得
-            const { data: { user }, error: authError } = await supabase.auth.getUser()
-            if (authError || !user) throw new Error('ログインが必要です')
-
-            // 2. ストレージパスを生成
-            const timestamp = Date.now()
-            const safeName = selectedFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
-            const storagePath = `${user.id}/${timestamp}/${safeName}`
+            // 1. サーバーから署名付きアップロードURLを取得（認証不要）
+            const presignRes = await fetch('/api/upload/presign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: selectedFile.name, mime: selectedFile.type }),
+            })
+            const presignJson = await presignRes.json()
+            if (!presignRes.ok) throw new Error(presignJson.error?.message ?? '署名URL取得失敗')
+            const { upload_url, storage_key } = presignJson.data
 
             setUploadProgress(10)
 
-            // 3. Supabase Storageに直接アップロード (XHRで進捗取得)
+            // 2. Supabase Storageへ直接アップロード（署名付きURLを使う）
             await new Promise<void>((resolve, reject) => {
                 const xhr = new XMLHttpRequest()
                 xhr.upload.onprogress = (e) => {
@@ -81,36 +76,25 @@ export default function UploadPage() {
                     }
                 }
                 xhr.onerror = () => reject(new Error('ネットワークエラー'))
-
-                const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').trim()
-                const anonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim()
-                // 新規ファイルアップロードはPOST（PUTは更新用）
-                const uploadUrl = `${supabaseUrl}/storage/v1/object/videos/${storagePath}`
-
-                xhr.open('POST', uploadUrl)
-                supabase.auth.getSession().then(({ data: { session } }) => {
-                    xhr.setRequestHeader('Authorization', `Bearer ${session?.access_token ?? ''}`)
-                    xhr.setRequestHeader('apikey', anonKey)  // 必須ヘッダー
-                    xhr.setRequestHeader('Content-Type', selectedFile.type)
-                    xhr.setRequestHeader('x-upsert', 'false')
-                    xhr.send(selectedFile)
-                }).catch(reject)
+                // 署名付きURLへのPUTアップロード
+                xhr.open('PUT', upload_url)
+                xhr.setRequestHeader('Content-Type', selectedFile.type)
+                xhr.send(selectedFile)
             })
 
             setUploadProgress(90)
 
-            // 4. ジョブを作成してパイプライン開始
+            // 3. ジョブ作成してAIパイプライン開始
             const jobRes = await fetch('/api/jobs', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    storage_key: storagePath,
+                    storage_key,
                     filename: selectedFile.name,
                     size: selectedFile.size,
                     mime: selectedFile.type,
                 }),
             })
-
             const jobJson = await jobRes.json()
             if (!jobRes.ok) throw new Error(jobJson.error?.message ?? 'ジョブ作成失敗')
 
